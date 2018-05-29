@@ -1,4 +1,5 @@
 $ExeMD5Count = @{}
+$ExeCmdCount = @{}
 $ExeByIPCount_Src = @{}
 $ExeByIPCount_Dst = @{}
 $ExeByPortCount_Dst = @{}
@@ -12,6 +13,23 @@ function BuildExeMD5CountReport([hashtable]$reportDictionary, $executable, $md5)
         $ExeMD5 | Add-Member -MemberType NoteProperty -Name MD5 -Value $md5
         $ExeMD5 | Add-Member -MemberType NoteProperty -Name Tally -Value 1
         $reportDictionary.Add($key,$ExeMD5)
+    } else {
+        $currentCount = $currentObject.Tally
+        $currentCount = $currentCount + 1
+        $currentObject.Tally = $currentCount
+    }
+
+}
+
+function BuildExeCmdCountReport([hashtable]$reportDictionary, $executable, $cmd) {
+    $key = $cmd
+    $currentObject = $reportDictionary[$key]
+    if ($currentObject -eq $null) {
+        $ExeCmd = New-Object -TypeName PSObject
+        $ExeCmd | Add-Member -MemberType NoteProperty -Name Executable -Value $executable
+        $ExeCmd | Add-Member -MemberType NoteProperty -Name Cmd -Value $cmd
+        $ExeCmd | Add-Member -MemberType NoteProperty -Name Tally -Value 1
+        $reportDictionary.Add($key,$ExeCmd)
     } else {
         $currentCount = $currentObject.Tally
         $currentCount = $currentCount + 1
@@ -57,10 +75,12 @@ function BuildExeByPortCount([hashtable]$reportDictionary, $executable, $ip, $po
     }
 }
 
-
+Write-Host "Retrieving all Sysmon events into memory for analysis..."
 $events = Get-WinEvent -Filterhashtable @{logname="Microsoft-Windows-Sysmon/Operational";}
+Write-Host "Done."
 
 $i = 0;
+Write-Host "Processing all Sysmon events..."
 foreach ($event in $events) {
 	$x = [xml]$event.ToXml()
 
@@ -69,14 +89,13 @@ foreach ($event in $events) {
     switch ($x.Event.System.EventID) {
         1 { $f = "0" + $x.Event.System.EventID + "-Process-Creation.txt" 
             BuildExeMD5CountReport([ref]$ExeMD5Count) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[11].'#text'
+            BuildExeCmdCountReport([ref]$ExeCmdCount) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[4].'#text'
         }
         2 { $f = "0" + $x.Event.System.EventID + "-Process-Changed-File-Creation.txt" }
-        3 { $f = "0" + $x.Event.System.EventID + "-Network-Connection.txt" 
-                  
+        3 { $f = "0" + $x.Event.System.EventID + "-Network-Connection.txt"                   
             BuildExeByIPCountReport ([ref]$ExeByIPCount_Src) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[8].'#text' $x.Event.EventData.Data[9].'#text'
             BuildExeByIPCountReport ([ref]$ExeByIPCount_Dst) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[13].'#text' $x.Event.EventData.Data[14].'#text'
-            BuildExeByPortCount([ref]$ExeByPortCount_Dst) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[13].'#text' $x.Event.EventData.Data[15].'#text'
-            
+            BuildExeByPortCount([ref]$ExeByPortCount_Dst) $x.Event.EventData.Data[3].'#text' $x.Event.EventData.Data[13].'#text' $x.Event.EventData.Data[15].'#text'            
         }
         4 { $f = "0" + $x.Event.System.EventID + "-Sysmon-Service-State-Changed.txt" }
         5 { $f = "0" + $x.Event.System.EventID + "-Process-Terminated.txt" }
@@ -105,8 +124,9 @@ foreach ($event in $events) {
     $i = $i + 1
 	
 }
+Write-Host "Done."
 
-
+Write-Host "Building report on the count of processes created by their MD5 hash..."
 $reportTable = New-Object System.Data.DataTable "ExecutableByMD5CountTable"
 $reportTable.Columns.Add("Executable", "string") | Out-Null
 $reportTable.Columns.Add("MD5", "string") | Out-Null
@@ -122,9 +142,27 @@ foreach ($k in $ExeMD5Count.Keys) {
 $reportTableView = New-Object System.Data.DataView($reportTable)
 $reportTableView.Sort = "Executable ASC, MD5 ASC, Count DESC"
 $reportTableView | Format-Table -Property Executable,MD5,Count -AutoSize | Out-String -Width 4096 | Out-File "ExeMD5Table.txt"
+Write-Host "Done."
 
+Write-Host "Building report on the count of processes created by their command line parameters..."
+$reportTable = New-Object System.Data.DataTable "ExecutableByCmdCountTable"
+$reportTable.Columns.Add("Executable", "string") | Out-Null
+$reportTable.Columns.Add("Cmd", "string") | Out-Null
+$reportTable.Columns.Add("Count", "string") | Out-Null
+foreach ($k in $ExeCmdCount.Keys) {    
+    $row = $reportTable.NewRow()
+    $row.Executable = $ExeCmdCount[$k].Executable
+    $row.Cmd = $ExeCmdCount[$k].Cmd
+    $row.Count = $ExeCmdCount[$k].Tally
+    $reportTable.Rows.Add($row)
 
+}
+$reportTableView = New-Object System.Data.DataView($reportTable)
+$reportTableView.Sort = "Executable ASC, Cmd ASC, Count DESC"
+$reportTableView | Format-Table -Property Count,Cmd -AutoSize | Out-String -Width 4096 | Out-File "ExeCmdTable.txt"
+Write-Host "Done."
 
+Write-Host "Building a report on the count of unique source IP addresses and the executable associated with network connections..." 
 $reportTable = New-Object System.Data.DataTable "ExecutableBySourceIPCountTable"
 $reportTable.Columns.Add("Executable", "string") | Out-Null
 $reportTable.Columns.Add("IP", "string") | Out-Null
@@ -142,7 +180,9 @@ foreach ($k in $ExeByIPCount_Src.Keys) {
 $reportTableView = New-Object System.Data.DataView($reportTable)
 $reportTableView.Sort = "Executable ASC, IP ASC, Count DESC"
 $reportTableView | Format-Table -Property Executable,IP,Hostname,Count -AutoSize | Out-String -Width 4096 | Out-File "ExeBySrcTable.txt"
+Write-Host "Done."
 
+Write-Host "Building a report on the count of unique destination IP addresses and the executables associated with the network connections..."
 $reportTable = New-Object System.Data.DataTable "ExecutableByDestinationIPCountTable"
 $reportTable.Columns.Add("Executable", "string") | Out-Null
 $reportTable.Columns.Add("IP", "string") | Out-Null
@@ -160,7 +200,9 @@ foreach ($k in $ExeByIPCount_Dst.Keys) {
 $reportTableView = New-Object System.Data.DataView($reportTable)
 $reportTableView.Sort = "Executable ASC, IP ASC, Count DESC"
 $reportTableView | Format-Table -Property Executable,IP,Hostname,Count -AutoSize | Out-String -Width 4096 | Out-File "ExeByDstTable.txt"
+Write-Host "Done."
 
+Write-Host "Building a report on the count of unique destination IP addresses, destination ports, and the executables associated with the network connections..."
 $reportTable = New-Object System.Data.DataTable "ExecutableByDestinationPortCountTable"
 $reportTable.Columns.Add("Executable", "string") | Out-Null
 $reportTable.Columns.Add("IP", "string") | Out-Null
@@ -178,3 +220,4 @@ foreach ($k in $ExeByPortCount_Dst.Keys) {
 $reportTableView = New-Object System.Data.DataView($reportTable)
 $reportTableView.Sort = "Executable ASC, Port ASC, IP ASC, Count DESC"
 $reportTableView | Format-Table -Property Executable,Port,IP,Count -AutoSize | Out-String -Width 4096 | Out-File "ExeByDstPortTable.txt"
+Write-Host "Done."
