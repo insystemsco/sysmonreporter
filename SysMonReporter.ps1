@@ -1,3 +1,5 @@
+# author: Michael Miranda (www.spartix.com)
+# date: 2018/05/09
 $ExeMD5Count = @{}
 $ExeCmdCount = @{}
 $ExeByIPCount_Src = @{}
